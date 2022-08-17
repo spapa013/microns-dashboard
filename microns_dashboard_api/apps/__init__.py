@@ -21,7 +21,7 @@ class UserApp(wra.App):
         self.core = (
             (
                 wra.Label(text='User', name='UserLabel') + \
-                wra.Field(disabled=True, name='UserField', on_interact=self.on_user_update, on_interact_kws=self.on_user_update_kwargs)
+                wra.Field(disabled=True, name='UserField', on_interact=self.on_user_update)
             ) - \
             (
                 wra.Label(text='User Info', name='UserInfoLabel') + \
@@ -47,8 +47,11 @@ class UserApp(wra.App):
     def user_info(self):
         return json.loads(self.children.UserInfoField.get1('value'))
     
-    def _on_user_update(self, **kwargs):
+    def on_user_update(self, **kwargs):
         pass
+
+    def _on_user_update(self):
+        self.on_user_update(**self.on_user_update_kwargs)
 
 
 class DataJointLoginApp(wra.App):
