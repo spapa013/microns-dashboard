@@ -1,13 +1,16 @@
 import wridgets.app as wra
 from ipywidgets import link
 import json
-
+from ..utils import get_user_info_js, DashboardUser
 
 class UserApp(wra.App):
     store_config = [
         'user_app'
     ]
     
+    get_user_info_js = get_user_info_js
+    show_user_info_app = DashboardUser
+
     def make(self, **kwargs):
         self.propagate = True
         self.on_user_update = self._on_user_update if kwargs.get('on_user_update') is None else kwargs.get('on_user_update')

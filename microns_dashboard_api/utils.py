@@ -3,7 +3,7 @@ from ipywidgets import DOMWidget, register
 import wridgets.app as wra
 from ipywidgets import link
 
-get_user_info = """
+get_user_info_js = """
     require.undef('user_widget');
 
     define('user_widget', ["@jupyter-widgets/base"], function (widgets) {
