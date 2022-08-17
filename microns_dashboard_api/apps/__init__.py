@@ -5,18 +5,22 @@ import json
 
 class UserApp(wra.App):
     store_config = [
-        'user',
-        'user_info',
         'user_app'
     ]
     
     def make(self, **kwargs):
         self.propagate = True
-        
+        self.on_user_update = self._on_user_update if kwargs.get('on_user_update') is None else kwargs.get('on_user_update')
         self.core = (
-            wra.Label(text='User', name='UserLabel') + \
-            wra.Field(disabled=True, name='UserField', on_interact=self.on_user_field_update) + \
-            wra.Field(disabled=True, name='UserInfoField', layout={'display': 'none'}, value='{}', wridget_type='Textarea', on_interact=self.on_user_info_field_update)
+            (
+                wra.Label(text='User', name='UserLabel') + \
+                wra.Field(disabled=True, name='UserField', on_interact=self.on_user_update)
+            ) - \
+            (
+                wra.Label(text='User Info', name='UserInfoLabel') + \
+                wra.Field(disabled=True, name='UserInfoField', value='{}', wridget_type='Textarea', layout={'width': 'initial'})
+            )
+            
         )
         
         if 'user_app' in kwargs:
@@ -27,9 +31,14 @@ class UserApp(wra.App):
         elif 'user_info' in kwargs:
             self.children.UserField.set(value=kwargs.get('user_info').get('name'))
             self.children.UserInfoField.set(value=json.dumps(kwargs.get('user_info')))
-
-    def on_user_field_update(self):
-        self.user = self.children.UserField.get1('value')
     
-    def on_user_info_field_update(self):
-        self.user_info = json.loads(self.children.UserInfoField.get1('value'))
+    @property
+    def user(self):
+        return self.children.UserField.get1('value')
+    
+    @property
+    def user_info(self):
+        return json.loads(self.children.UserInfoField.get1('value'))
+    
+    def _on_user_update(self):
+        pass
