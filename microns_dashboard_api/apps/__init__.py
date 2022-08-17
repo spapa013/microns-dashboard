@@ -9,7 +9,6 @@ class UserApp(wra.App):
     ]
     
     get_user_info_js = get_user_info_js
-    show_user_info_app = DashboardUser
 
     def make(self, **kwargs):
         self.propagate = True
