@@ -17,10 +17,11 @@ class UserApp(wra.App):
     def make(self, **kwargs):
         self.propagate = True
         self.on_user_update = self._on_user_update if kwargs.get('on_user_update') is None else kwargs.get('on_user_update')
+        self.on_user_update_kwargs = {} if kwargs.get('on_user_update_kwargs') is None else kwargs.get('on_user_update_kwargs')
         self.core = (
             (
                 wra.Label(text='User', name='UserLabel') + \
-                wra.Field(disabled=True, name='UserField', on_interact=self.on_user_update)
+                wra.Field(disabled=True, name='UserField', on_interact=self.on_user_update, on_interact_kws=self.on_user_update_kwargs)
             ) - \
             (
                 wra.Label(text='User Info', name='UserInfoLabel') + \
@@ -46,7 +47,7 @@ class UserApp(wra.App):
     def user_info(self):
         return json.loads(self.children.UserInfoField.get1('value'))
     
-    def _on_user_update(self):
+    def _on_user_update(self, **kwargs):
         pass
 
 
