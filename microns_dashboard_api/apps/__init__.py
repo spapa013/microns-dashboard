@@ -50,7 +50,7 @@ class UserApp(wra.App):
         pass
 
 
-class DataJointLogin(wra.App):
+class DataJointLoginApp(wra.App):
     store_config = [
         'is_connected'
     ]
