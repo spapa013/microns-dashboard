@@ -5,7 +5,7 @@ import time
 import wridgets.app as wra
 from ipywidgets import link
 import datajoint_plus as djp
-from ..utils import DashboardUser, get_user_info_js
+from ..utils import GetDashboardUser, get_user_info_js
 from ..schemas import dashboard as db
 
 class UserApp(wra.App):

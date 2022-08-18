@@ -53,7 +53,7 @@ get_user_info_js = """
 
 
 @register
-class DashboardUser(DOMWidget):
+class GetDashboardUser(DOMWidget):
     """
     Get JupyterHub user info
     https://gist.github.com/danlester/ac1d5f29358ce1950482f8e7d4301f86
