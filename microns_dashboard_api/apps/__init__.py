@@ -9,19 +9,19 @@ from ..utils import DashboardUser, get_user_info_js
 
 class UserApp(wra.App):
     store_config = [
-        'user_app'
+        'user_app',
     ]
     
     get_user_info_js = get_user_info_js
 
     def make(self, **kwargs):
         self.propagate = True
-        self.on_user_update = self._on_user_update if kwargs.get('on_user_update') is None else kwargs.get('on_user_update')
+        self.on_user_update = self.on_user_update if kwargs.get('on_user_update') is None else kwargs.get('on_user_update')
         self.on_user_update_kwargs = {} if kwargs.get('on_user_update_kwargs') is None else kwargs.get('on_user_update_kwargs')
         self.core = (
             (
                 wra.Label(text='User', name='UserLabel') + \
-                wra.Field(disabled=True, name='UserField', on_interact=self.on_user_update)
+                wra.Field(disabled=True, name='UserField', on_interact=self._on_user_update)
             ) - \
             (
                 wra.Label(text='User Info', name='UserInfoLabel') + \
