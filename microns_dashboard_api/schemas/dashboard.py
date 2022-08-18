@@ -262,8 +262,7 @@ class ProcessedEvent(djp.Lookup):
 
         @classproperty
         def key_source(cls):
-            restr = Event.TestEvent * EventHandler.TestEvent
-            return (Event & restr) * (EventHandler & restr)
+            return djp.U('event_id', 'event_handler_id') & (Event.TestEvent * EventHandler.TestEvent)
 
         def make(self, key):
             self.master.make(self, key)
@@ -284,8 +283,7 @@ class ProcessedEvent(djp.Lookup):
 
         @classproperty
         def key_source(cls):
-            restr = Event.UserAdd * EventHandler.UserEvent
-            return (Event & restr) * (EventHandler & restr)
+            return djp.U('event_id', 'event_handler_id') & (Event.UserAdd * EventHandler.UserEvent)
 
         def make(self, key):
             self.master.make(self, key)
@@ -306,8 +304,7 @@ class ProcessedEvent(djp.Lookup):
 
         @classproperty
         def key_source(cls):
-            restr = Event.UserInfoAdd * EventHandler.UserEvent
-            return (Event & restr) * (EventHandler & restr)
+            return djp.U('event_id', 'event_handler_id') & (Event.UserInfoAdd * EventHandler.UserEvent)
 
         def make(self, key):
             self.master.make(self, key)
@@ -329,8 +326,7 @@ class ProcessedEvent(djp.Lookup):
 
         @classproperty
         def key_source(cls):
-            restr = Event.UserAccess * EventHandler.UserEvent
-            return (Event & restr) * (EventHandler & restr)
+            return djp.U('event_id', 'event_handler_id') & (Event.UserAccess * EventHandler.UserEvent)
 
         def make(self, key):
             self.master.make(self, key)
@@ -352,8 +348,7 @@ class ProcessedEvent(djp.Lookup):
 
         @classproperty
         def key_source(cls):
-            restr = Event.UserCheckIn * EventHandler.UserEvent
-            return (Event & restr) * (EventHandler & restr)
+            return djp.U('event_id', 'event_handler_id') & (Event.UserCheckIn * EventHandler.UserEvent)
 
         def make(self, key):
             self.master.make(self, key)
@@ -375,8 +370,7 @@ class ProcessedEvent(djp.Lookup):
 
         @classproperty
         def key_source(cls):
-            restr = Event.UserCheckOut * EventHandler.UserEvent
-            return (Event & restr) * (EventHandler & restr)
+            return djp.U('event_id', 'event_handler_id') & (Event.UserCheckOut * EventHandler.UserEvent)
 
         def make(self, key):
             self.master.make(self, key)
