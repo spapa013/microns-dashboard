@@ -1,3 +1,4 @@
+from asyncio.log import logger
 import json
 import time
 
@@ -5,7 +6,7 @@ import wridgets.app as wra
 from ipywidgets import link
 import datajoint_plus as djp
 from ..utils import DashboardUser, get_user_info_js
-
+from ..schemas import dashboard as db
 
 class UserApp(wra.App):
     store_config = [
@@ -36,7 +37,7 @@ class UserApp(wra.App):
             link((self.children.UserInfoField.wridget.widget, 'value'), (self.user_app, 'value'), transform=[json.loads, json.dumps])
             
         elif 'user_info' in kwargs:
-            self.children.UserField.set(value=kwargs.get('user_info').get('name'))
+            self.children.UserField.set(value=kwargs.get('user_info').get('user'))
             self.children.UserInfoField.set(value=json.dumps(kwargs.get('user_info')))
     
     @property
@@ -51,6 +52,10 @@ class UserApp(wra.App):
         pass
 
     def _on_user_update(self):
+        try:
+            event = db.Event.log_event('user_access', {'user': self.user})
+        except:
+            logger.warning('Could not update dashboard.Event.UserAccess')
         self.on_user_update(**self.on_user_update_kwargs)
 
 
