@@ -5,6 +5,8 @@ import time
 import wridgets.app as wra
 from ipywidgets import link
 import datajoint_plus as djp
+import pandas as pd
+from microns_utils.misc_utils import wrap
 from ..utils import GetDashboardUser, get_user_info_js
 from ..schemas import dashboard as db
 
@@ -113,9 +115,125 @@ class DataJointLoginApp(wra.App):
             self.clear_output()
 
             if self.hide_on_login:
-                self.set(layout={'display': 'none'})
+                self.set(hide=True)
 
             if self.disable_on_login:
                 self.set(disabled=True)
             
             self.on_login(**self.on_login_kwargs)
+
+
+class ProtocolManager(wra.App):
+    store_config = [
+        'source',
+        'all_protocols',
+        'active_protocols',
+        'protocol_id',
+        'protocol_name'
+    ]
+    def make(self, source, on_select=None, manage=False, **kwargs):
+        self.source = source
+        self.propagate = True
+        self.set_protocol_options()
+        
+        self._header_kws = dict(
+            text="Protocol", 
+            name='ProtocolSelectLabel'
+        )
+        self._toggle_buttons_kws = dict(
+            wridget_type='ToggleButtons', 
+            options=self.protocol_options,
+            name='ProtocolSelectButtons',
+            on_interact=self.set_protocol
+        )
+        self._select_button_kws = dict(
+            description='Select', 
+            on_interact=on_select,
+            button_style='info',
+            name='ProtocolSelectButton'
+        )
+        self._manage_button_kws = dict(
+            description='Manage',
+            on_interact=self.manage_protocols,
+            button_style='warning',
+            hide=not manage,
+            name='ProtocolManageButton'
+        )
+        self._tags_kws = dict(
+            value=self.active_protocols,
+            allowed_tags=self.all_protocols,
+            hide=True,
+            name='ProtocolTags'
+        )
+        self.core = (
+            (
+                wra.Label(**self._header_kws) + \
+                wra.SelectButtons(**self._toggle_buttons_kws) + \
+                wra.ToggleButton(**self._select_button_kws) + \
+                wra.ToggleButton(**self._manage_button_kws) 
+            ) - \
+            wra.Tags(**self._tags_kws)
+        )
+        self.set_protocol()
+    
+    def set_protocol(self):
+        self.protocol_name = self.children.ProtocolSelectButtons.get1('label')
+        self.protocol_id = self.children.ProtocolSelectButtons.get1('value')
+    
+    def set_protocol_options(self):
+        ids, names, active = self.source.fetch('protocol_id', 'protocol_name', 'active', order_by='-ordering DESC')
+        self.active_protocol_ids = ids[active.astype(bool)].tolist()
+        self.active_protocols = names[active.astype(bool)].tolist()
+        self.all_protocols = names.tolist()
+    
+    @property
+    def protocol_options(self):
+        if self.active_protocols is not None and self.active_protocol_ids is not None:
+            return [(n, i) for n, i in zip(self.active_protocols, self.active_protocol_ids)]
+    
+    def manage_protocols(self):
+        if self.children.ProtocolManageButton.get1('value'):
+            self.children.ProtocolManageButton.set(description='Set')
+            self.children.ProtocolTags.set(hide=False)
+        else:
+            self.update_protocols()
+            self.set_protocol_options()
+            self.children.ProtocolSelectButtons.set(options=self.protocol_options, value=self.protocol_options[0])
+            self.children.ProtocolManageButton.set(description='Manage')
+            self.children.ProtocolTags.set(hide=True)
+    
+    def update_protocols(self):
+        updated = self.children.ProtocolTags.get1('value')
+        for key in self.source:
+            protocol_name = key.get('protocol_name')
+            if protocol_name in updated:
+                key.update({'active': 1})
+                key.update({'ordering': updated.index(protocol_name)})
+            else:
+                key.update({'active': 0})
+                key.update({'ordering': None})
+            self.source.insert1(key, replace=True)   
+
+
+class DataJointTableApp(wra.App):
+    store_config = [
+        'source',
+        'attrs',
+        'n_rows'
+    ]
+    def make(self, source, attrs=None, n_rows=25, **kwargs):
+        self.source = source
+        self.attrs = source.heading.names if attrs is None else wrap(attrs)
+        self.n_rows = n_rows
+
+    def to_df(self, restrict=None, subtract=None):
+        restr = {} if restrict is None else restrict
+        subtr = [] if subtract is None else subtract
+
+        df = pd.DataFrame(
+            (
+                (self.source & restr) - subtr
+            ).fetch(limit=self.n_rows)
+        )
+        df = df[[*self.attrs]]
+        return df
