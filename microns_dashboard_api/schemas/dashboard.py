@@ -10,7 +10,7 @@ import datajoint as dj
 import datajoint_plus as djp
 import pandas as pd
 from microns_utils.datetime_utils import current_timestamp
-from microns_utils.misc_utils import classproperty, unwrap
+from microns_utils.misc_utils import classproperty, wrap, unwrap
 from microns_utils.widget_utils import SlackForWidget
 
 from .. import base
@@ -27,133 +27,157 @@ os.environ['DJ_LOGLEVEL'] ='WARNING'
 logger = djp.getLogger(__name__, level='WARNING', update_root_level=True)
 
 
-version_attr = """-> Version \n"""
-user_attr = """user : varchar(128) # dashboard username \n"""
-info_type_attr = """info_type : varchar(128) \n"""
+user_attr = """user : varchar(128) # dashboard username"""
 
 @schema
-class Version(base.VersionLookup):
+class Tag(base.VersionLookup):
     package = 'microns-dashboard'
+    attr_name = 'tag'
 
 
 @schema
 class Event(base.EventLookup):
     basedir = Path(config.externals.get('events').get('location'))
-    additional_secondary_attrs = version_attr
+    extra_secondary_attrs = f"""
+    -> {Tag.class_name}
+    """
 
-    class UserInfoAdd(base.EventType):
-        event_types = 'user_info_add'
-        constant_attrs = {'version_id': Version.current_version_id}
-        additional_primary_attrs = version_attr
-        additional_secondary_attrs = user_attr + info_type_attr
+    class UserAccess(base.Event):
+        events = 'user_access'
+        constant_attrs = {Tag.attr_name: Tag.version}
+        extra_primary_attrs = f"""
+        -> {Tag.class_name}
+        """
+        extra_secondary_attrs = user_attr
+    
+    class UserCheckIn(base.Event):
+        events = 'user_check_in'
+        constant_attrs = {Tag.attr_name: Tag.version}
+        extra_primary_attrs = f"""
+        -> {Tag.class_name}
+        """
+        extra_secondary_attrs = f"""
+        {user_attr}
+        check_in : tinyint # 1 if check in; 0 if check out
+        """
+
+    class UserAdd(base.Event):
+        events = ['user_add', 'user_add_info']
+        constant_attrs = {Tag.attr_name: Tag.version}
+        extra_primary_attrs = f"""
+        -> {Tag.class_name}
+        """
+        extra_secondary_attrs = f"""
+        {user_attr}
+        info_type=NULL : varchar(128)
+        """
 
         def on_event(self, event):
-            UserInfo.Maker.populate({'event_id': event.id})
-
-    class UserAccess(base.EventType):
-        event_types = 'user_access'
-        constant_attrs = {'version_id': Version.current_version_id}
-        additional_primary_attrs = version_attr
-        additional_secondary_attrs = user_attr
-
-    class UserCheckIn(base.EventType):
-        event_types = 'user_check_in'
-        constant_attrs = {'version_id': Version.current_version_id}
-        additional_primary_attrs = version_attr
-        additional_secondary_attrs = (
-            user_attr + \
-            """check_in : tinyint # 1 if check in; 0 if check out \n"""
-        )
+            if event.name == 'user_add':
+                User.Add.populate({'event_id': event.id})
+            
+            elif event.name == 'user_add_info':
+                User.AddInfo.populate({'event_id': event.id})
 
 
 @schema
 class EventHandler(base.EventHandlerLookup):
-    current_version_id = Version.current_version_id
 
-    class UserEvent(djp.Part, dj.Lookup):
-        enable_hashing = True
-        hash_name = 'event_handler_id'
-        hashed_attrs = 'version_id', 'event_type'
-        definition = """
-        -> master
-        event_type : varchar(450) # type of event that method handles
-        -> Version
+    @classmethod
+    def run(cls, key):
+        handler = cls.r1p(key)
+        handler_event = handler.fetch1('event')
+        handler_version = handler.fetch1(Tag.attr_name)
+        cls.Log('info',  'Running %s', handler.class_name)
+        cls.Log('debug', 'Running %s with key %s', handler.class_name, key)
+        assert handler_event == key['event'], f'event in handler {handler_event} doesnt match event in key {key["event"]}'
+        assert handler_version == Tag.version, f'version mismatch, event_handler version_id is {handler_version} but the current version_id is {Tag.version}'
+        key = handler.run(key)
+        cls.Log('info', '%s ran successfully.', handler.class_name)
+        return key
+
+    class UserEvent(base.EventHandler):
+        constant_attrs = {Tag.attr_name: Tag.version}
+        hashed_attrs = 'event', Tag.attr_name
+        extra_primary_attrs = f"""
+        -> {Tag.class_name}
         """
 
         @classproperty
         def contents(cls):
-            for event_type in ['user_info_add']:
-                cls.insert({'event_type': event_type, 'version_id': Version.current_version_id}, ignore_extra_fields=True, skip_duplicates=True, insert_to_master=True)
+            for event in Event.UserAdd.events:
+                key = {'event': event}
+                key.update(cls.constant_attrs)
+                cls.insert(key, ignore_extra_fields=True, skip_duplicates=True, insert_to_master=True)
             return {}
 
-        def run(self, **key):
-            event_type = self.fetch1('event_type')
+        def run(self, key):
+            event = self.fetch1('event')
 
-            if event_type in ['user_info_add']:
-                assert event_type == key['event_type'], f'event_type in handler {event_type} doesnt match event_type in key {key["event_type"]}'
+            if event in ['user_add']:
+                return key
+            
+            if event in ['user_add_info']:
                 info_type = key.get('info_type')
-                assert info_type is not None
-
+                
                 if info_type == 'slack_username':
                     username = slack_client.get_slack_username(key.get('data'))
-                    assert username is not None, 'Slack usename not found.'
-                    key['username'] = username
+                    assert username is not None, 'Slack username not found.'
+                    key[info_type] = username
                 
                 return key
 
 
 @schema
-class UserInfo(djp.Lookup):
-    definition = user_attr
+class User(djp.Lookup):
+    hash_name = 'make_id'
+    definition = f"""
+    {user_attr}
+    ---
+    make_id : varchar(10)
+    timestamp=CURRENT_TIMESTAMP : timestamp
+    """
 
-    class Maker(djp.Part, dj.Computed):
-        enable_hashing = True
-        hash_name = 'ui_make_id'
-        hashed_attrs = Event.primary_key + EventHandler.primary_key
+    class Add(base.Maker):
+        hash_name = 'make_id'
+        upstream = Event
+        method = EventHandler
+        events = 'user_add'
         definition = """
-        ui_make_id : varchar(10)
+        -> master
         -> Event
         -> EventHandler
-        ---
-        -> master
-        ts_inserted=CURRENT_TIMESTAMP : timestamp
+        make_id : varchar(10)
         """
-
         @classproperty
         def key_source(cls):
-            return djp.U('event_id', 'event_handler_id') & Event.UserInfoAdd * EventHandler.UserEvent
+            return (djp.U('event_id', 'event_handler_id') & ((Event.UserAdd & [{'event': e} for e in wrap(cls.events)]) * EventHandler.UserEvent))
 
-        def make(self, key):
-            key[self.hash_name] = self.hash1(key)
-            try:
-                key.update(Event.get1(key))
-                key.update(EventHandler.run(key))
-                self.insert1(key, ignore_extra_fields=True, insert_to_master=True, insert_to_master_kws={'ignore_extra_fields': True, 'skip_duplicates': True}, skip_hashing=True)
-                
-                if key.get('info_type') == 'slack_username':
-                    self.master.Slack.insert1(key, ignore_extra_fields=True, skip_duplicates=True)
-            except:
-                key['traceback'] = traceback.format_exc()
-                self.master.Attempted.insert1(key, insert_to_master=True, ignore_extra_fields=True)
-                self.master.Log('exception', 'Error inserting Submission')
-            
-
-    class Attempted(djp.Part):
+    class AddInfo(base.Maker):
+        hash_name = 'make_id'
+        upstream = Event
+        method = EventHandler
+        events = 'user_add_info'
         definition = """
         -> master
         -> Event
         -> EventHandler
-        ---
-        traceback=NULL : longblob
-        ts_inserted_attempted=CURRENT_TIMESTAMP : timestamp # timestamp inserted into Attempted
+        make_id : varchar(10)
         """
+        @classproperty
+        def key_source(cls):
+            return (djp.U('event_id', 'event_handler_id') & ((Event.UserAdd & [{'event': e} for e in wrap(cls.events)]) * EventHandler.UserEvent))
+
+        def on_make(self, key):
+            if key.get('info_type') == 'slack_username':
+                self.master.Slack.insert1(key, ignore_extra_fields=True, skip_duplicates=True)
 
     class Slack(djp.Part):
         definition = f"""
         -> master
         ---
-        username : varchar(450)
-        ui_make_id : varchar(32)
+        slack_username : varchar(450)
+        make_id : varchar(10)
         """
 
 schema.spawn_missing_classes()
