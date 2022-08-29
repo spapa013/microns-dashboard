@@ -1,5 +1,5 @@
-from asyncio.log import logger
 import json
+import logging
 import time
 
 import wridgets.app as wra
@@ -54,10 +54,17 @@ class UserApp(wra.App):
         pass
 
     def _on_user_update(self):
+        key = {'user': self.user}
+        if len(db.User & key) == 0:
+            try:
+                    logging.info(f'user {key.get("user")} not found. Adding...')
+                    event = db.Event.log_event('user_add', key)
+            except:
+                logging.exception('Could not add user to dashboard.Event.UserAdd')
         try:
-            event = db.Event.log_event('user_access', {'user': self.user})
+            event = db.Event.log_event('user_access', key)
         except:
-            logger.warning('Could not update dashboard.Event.UserAccess')
+            logging.exception('Could not update dashboard.Event.UserAccess')
         self.on_user_update(**self.on_user_update_kwargs)
 
 
