@@ -172,15 +172,17 @@ class ProtocolManager(wra.App):
             hide=True,
             name='ProtocolTags'
         )
-        self.core = (
-            (
-                wra.Label(**self._header_kws) + \
-                wra.SelectButtons(**self._toggle_buttons_kws) + \
-                wra.ToggleButton(**self._select_button_kws) + \
-                wra.ToggleButton(**self._manage_button_kws) 
-            ) - \
-            wra.Tags(**self._tags_kws)
-        )
+        base_app = (
+            wra.Label(**self._header_kws) + \
+            wra.SelectButtons(**self._toggle_buttons_kws) + \
+            wra.ToggleButton(**self._select_button_kws) + \
+            wra.ToggleButton(**self._manage_button_kws) 
+            )
+        manage_app = wra.Tags(**self._tags_kws)
+        if manage:
+            self.core = base_app - manage_app
+        else:
+            self.core = base_app
         self.set_protocol()
     
     def set_protocol(self):
@@ -219,7 +221,7 @@ class ProtocolManager(wra.App):
             else:
                 key.update({'active': 0})
                 key.update({'ordering': None})
-            self.source.insert1(key, replace=True)   
+            self.source.insert1(key, replace=True)
 
 
 class DataJointTableApp(wra.App):
