@@ -5,15 +5,16 @@ import json
 import os
 from pathlib import Path
 import traceback
+from xml.etree.ElementInclude import include
 
 import datajoint as dj
 import datajoint_plus as djp
 import pandas as pd
+import microns_utils.datajoint_utils as dju
 from microns_utils.datetime_utils import current_timestamp
 from microns_utils.misc_utils import classproperty, wrap, unwrap
 from microns_utils.widget_utils import SlackForWidget
 
-from .. import base
 from ..config import dashboard_config as config
 
 config.register_externals()
@@ -29,28 +30,36 @@ logger = djp.getLogger(__name__, level='WARNING', update_root_level=True)
 
 user_attr = """user : varchar(128) # dashboard username"""
 
+
 @schema
-class Tag(base.VersionLookup):
+class Tag(dju.VersionLookup):
     package = 'microns-dashboard'
     attr_name = 'tag'
 
 
 @schema
-class Event(base.EventLookup):
+class Event(dju.EventLookup):
     basedir = Path(config.externals.get('events').get('location'))
     extra_secondary_attrs = f"""
     -> {Tag.class_name}
     """
 
-    class UserAccess(base.Event):
+    class UserAccess(dju.Event):
         events = 'user_access'
         constant_attrs = {Tag.attr_name: Tag.version}
         extra_primary_attrs = f"""
         -> {Tag.class_name}
         """
         extra_secondary_attrs = user_attr
+        def on_event(self, event):
+            user, data = (self & {'event_id': event.id}).fetch1('user', 'data')
+            if data is not None:
+                entry_point = data.get('entry_point') if data.get('entry_point') is not None else 'dashboard'
+            else:
+                entry_point = 'dashboard'
+            slack_client.post_to_slack(f'```{user} accessed the {entry_point} ```')                
     
-    class UserCheckIn(base.Event):
+    class UserCheckIn(dju.Event):
         events = 'user_check_in'
         constant_attrs = {Tag.attr_name: Tag.version}
         extra_primary_attrs = f"""
@@ -60,8 +69,17 @@ class Event(base.EventLookup):
         {user_attr}
         check_in : tinyint # 1 if check in; 0 if check out
         """
+        def on_event(self, event):
+            user, check_in, data = (self & {'event_id': event.id}).fetch1('user', 'check_in', 'data')
+            if data is not None:
+                auto = data.get('auto')
+            else:
+                auto = False
+            msg = f"```%s {'' if not auto else 'auto-'}checked {'in' if check_in else 'out'}```"
+            slack_client.post_to_slack(msg % user)
+            slack_client.post_to_slack(msg % 'You', channel=f'@{User.Slack.get_slack_username(user)}')
 
-    class UserAdd(base.Event):
+    class UserAdd(dju.Event):
         events = ['user_add', 'user_add_info']
         constant_attrs = {Tag.attr_name: Tag.version}
         extra_primary_attrs = f"""
@@ -71,18 +89,22 @@ class Event(base.EventLookup):
         {user_attr}
         info_type=NULL : varchar(128)
         """
-
         def on_event(self, event):
             if event.name == 'user_add':
                 User.Add.populate({'event_id': event.id})
+                user = (self & {'event_id': event.id}).fetch1('user')
+                slack_client.post_to_slack(f"```{user} was added to the dashboard```")
             
             elif event.name == 'user_add_info':
                 User.AddInfo.populate({'event_id': event.id})
+                user, info_type = (self & {'event_id': event.id}).fetch1('user', 'info_type')
+                msg = f"```%s updated %s {' '.join(info_type.split('_'))}```"
+                slack_client.post_to_slack(msg % (user, 'their'))
+                slack_client.post_to_slack(msg % ('You', 'your'), channel=f'@{User.Slack.get_slack_username(user)}')
 
 
 @schema
-class EventHandler(base.EventHandlerLookup):
-
+class EventHandler(dju.EventHandlerLookup):
     @classmethod
     def run(cls, key):
         handler = cls.r1p(key)
@@ -96,7 +118,7 @@ class EventHandler(base.EventHandlerLookup):
         cls.Log('info', '%s ran successfully.', handler.class_name)
         return key
 
-    class UserEvent(base.EventHandler):
+    class UserEvent(dju.EventHandler):
         constant_attrs = {Tag.attr_name: Tag.version}
         hashed_attrs = 'event', Tag.attr_name
         extra_primary_attrs = f"""
@@ -138,7 +160,7 @@ class User(djp.Lookup):
     timestamp=CURRENT_TIMESTAMP : timestamp
     """
 
-    class Add(base.Maker):
+    class Add(dju.Maker):
         hash_name = 'make_id'
         upstream = Event
         method = EventHandler
@@ -153,7 +175,7 @@ class User(djp.Lookup):
         def key_source(cls):
             return (djp.U('event_id', 'event_handler_id') & ((Event.UserAdd & [{'event': e} for e in wrap(cls.events)]) * EventHandler.UserEvent))
 
-    class AddInfo(base.Maker):
+    class AddInfo(dju.Maker):
         hash_name = 'make_id'
         upstream = Event
         method = EventHandler
@@ -170,9 +192,10 @@ class User(djp.Lookup):
 
         def on_make(self, key):
             if key.get('info_type') == 'slack_username':
-                self.master.Slack.insert1(key, ignore_extra_fields=True, skip_duplicates=True)
+                self.master.Slack.insert1(key, ignore_extra_fields=True, replace=True)
 
     class Slack(djp.Part):
+        store = True
         definition = f"""
         -> master
         ---
@@ -181,4 +204,4 @@ class User(djp.Lookup):
         """
 
 schema.spawn_missing_classes()
-schema.connection.dependencies.load()
+
