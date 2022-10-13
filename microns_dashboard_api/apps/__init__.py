@@ -4,21 +4,66 @@ import time
 
 import wridgets.app as wra
 from ipywidgets import link
+import numpy as np
 import datajoint_plus as djp
 import pandas as pd
 from microns_utils.misc_utils import wrap
 from ..utils import GetDashboardUser, get_user_info_js
 from ..schemas import dashboard as db
+from collections import namedtuple
+logger = djp.getLogger(__name__)
+
+
+class DataType:   
+    Protocol = namedtuple('Protocol', ['ID', 'name', 'tag', 'active', 'ordering'])
+    Protocol.__repr__ = lambda self: 'Protocol(' + ', '.join([f'{f}={getattr(self, f)}' for f in self._fields ]) + ')'
+
+
+class AppLink(wra.App):
+    def make(self, app1, app2, attr1='value', attr2='value', fwd_transform=None, rev_transform=None, orientation='vertical', **kwargs):
+        self.setdefault('app1', app1)
+        self.setdefault('app2', app2)
+        self.setdefault('attr1', attr1)
+        self.setdefault('attr2', attr2)
+        self.setdefault('fwd_transform', fwd_transform)
+        self.setdefault('rev_transform', rev_transform)
+        self.setdefault('orientation', orientation)
+        self.defaults.update(kwargs)
+        
+        app1_kws = self.setdefault('app1_kws', {})
+        app2_kws = self.setdefault('app2_kws', {})
+        
+        # WrApps
+        self._app1 = getattr(wra, self.getdefault('app1'))(**app1_kws)
+        self._app2 = getattr(wra, self.getdefault('app2'))(**app2_kws)
+        
+        if self.getdefault('orientation') == 'vertical':
+            self.core = self._app1 - self._app2
+        elif self.getdefault('orientation') == 'horizontal':
+            self.core = self._app1 + self._app2
+        else:
+            raise AttributeError('orientation not recognized. options are "vertical" or "horizontal"')
+        
+        fwd_transform = self.getdefault('fwd_transform')
+        rev_transform = self.getdefault('rev_transform')
+        transform = [fwd_transform, rev_transform] if fwd_transform is not None and rev_transform is not None else None
+        link((self._app1.wridget.widget, self.getdefault('attr1')), ((self._app2.wridget.widget, self.getdefault('attr2'))), transform=transform)
+
 
 class UserApp(wra.App):
     store_config = [
         'user_app',
+        'user_info',
+        'entry_point',
+        'on_user_update',
+        'on_user_update_kwargs',
     ]
     
     get_user_info_js = get_user_info_js
 
     def make(self, **kwargs):
         self.propagate = True
+        self.entry_point = kwargs.get('entry_point')
         self.on_user_update = self.on_user_update if kwargs.get('on_user_update') is None else kwargs.get('on_user_update')
         self.on_user_update_kwargs = {} if kwargs.get('on_user_update_kwargs') is None else kwargs.get('on_user_update_kwargs')
         self.core = (
@@ -39,6 +84,7 @@ class UserApp(wra.App):
             link((self.children.UserInfoField.wridget.widget, 'value'), (self.user_app, 'value'), transform=[json.loads, json.dumps])
             
         elif 'user_info' in kwargs:
+            self.user_info = kwargs.get('user_info')
             self.children.UserField.set(value=kwargs.get('user_info').get('user'))
             self.children.UserInfoField.set(value=json.dumps(kwargs.get('user_info')))
     
@@ -54,17 +100,6 @@ class UserApp(wra.App):
         pass
 
     def _on_user_update(self):
-        key = {'user': self.user}
-        if len(db.User & key) == 0:
-            try:
-                    logging.info(f'user {key.get("user")} not found. Adding...')
-                    event = db.Event.log_event('user_add', key)
-            except:
-                logging.exception('Could not add user to dashboard.Event.UserAdd')
-        try:
-            event = db.Event.log_event('user_access', key)
-        except:
-            logging.exception('Could not update dashboard.Event.UserAccess')
         self.on_user_update(**self.on_user_update_kwargs)
 
 
@@ -132,96 +167,205 @@ class DataJointLoginApp(wra.App):
 
 class ProtocolManager(wra.App):
     store_config = [
-        'source',
-        'all_protocols',
-        'active_protocols',
-        'protocol_id',
-        'protocol_name'
+        ('protocol_is_set', False)
     ]
-    def make(self, source, on_select=None, manage=False, **kwargs):
+
+    def make(self, source, on_set_protocol=None, on_set_protocol_kws=None, manage=False, **kwargs):
         self.source = source
-        self.propagate = True
-        self.set_protocol_options()
+        self.on_set_protocol = self.setdefault('on_set_protocol', on_set_protocol if on_set_protocol is not None else self.on_set_protocol)
+        self.on_set_protocol_kws = self.setdefault('on_set_protocol_kws', on_set_protocol_kws if on_set_protocol_kws is not None else {})
+        self.manage = self.setdefault('manage', manage)
+        self.defaults.update(kwargs)
         
-        self._header_kws = dict(
-            text="Protocol", 
-            name='ProtocolSelectLabel'
-        )
-        self._toggle_buttons_kws = dict(
-            wridget_type='ToggleButtons', 
-            options=self.protocol_options,
-            name='ProtocolSelectButtons',
-            on_interact=self.set_protocol
-        )
-        self._select_button_kws = dict(
-            description='Select', 
-            on_interact=on_select,
-            button_style='info',
-            name='ProtocolSelectButton'
-        )
-        self._manage_button_kws = dict(
-            description='Manage',
-            on_interact=self.manage_protocols,
-            button_style='warning',
-            hide=not manage,
-            name='ProtocolManageButton'
-        )
-        self._tags_kws = dict(
-            value=self.active_protocols,
-            allowed_tags=self.all_protocols,
-            hide=True,
-            name='ProtocolTags'
-        )
-        base_app = (
-            wra.Label(**self._header_kws) + \
-            wra.SelectButtons(**self._toggle_buttons_kws) + \
-            wra.ToggleButton(**self._select_button_kws) + \
-            wra.ToggleButton(**self._manage_button_kws) 
+        label_kws = self.setdefault('label_kws', {})
+        label_kws.setdefault('prefix', self.name)
+        label_kws.setdefault('text', 'Protocol')
+        
+        active_select_label_kws = self.setdefault('active_select_label_kws', {})
+        active_select_label_kws.setdefault('prefix', self.name)
+        active_select_label_kws.setdefault('text', 'Active Protocols')
+        active_select_label_kws.setdefault('fontsize', '0.5')
+        active_select_label_kws.setdefault('minimize', True)
+        
+        active_select_kws = self.setdefault('active_select_kws', {})
+        active_select_kws.setdefault('prefix', self.name)
+        
+        set_protocol_button_kws = self.setdefault('set_protocol_button_kws', {})
+        set_protocol_button_kws.setdefault('prefix', self.name)
+        set_protocol_button_kws.setdefault('description', 'Set')
+        set_protocol_button_kws.setdefault('button_style', 'info')
+        set_protocol_button_kws.setdefault('on_interact', self._on_set_protocol)
+        
+        refresh_button_kws = self.setdefault('refresh_button_kws', {})
+        refresh_button_kws.setdefault('prefix', self.name)
+        refresh_button_kws.setdefault('description', 'Refresh')
+        refresh_button_kws.setdefault('on_interact', self.refresh)
+        refresh_button_kws.setdefault('button_style', 'warning')
+        
+        manage_button_kws = self.setdefault('manage_button_kws', {})
+        manage_button_kws.setdefault('prefix', self.name)
+        manage_button_kws.setdefault('description', 'Manage')
+        manage_button_kws.setdefault('minimize', not self.getdefault('manage'))
+        manage_button_kws.setdefault('button_style', 'warning')
+        manage_button_kws.setdefault('on_interact', self.on_manage)
+        
+        inactive_select_label_kws = self.setdefault('inactive_select_label_kws', {})
+        inactive_select_label_kws.setdefault('prefix', self.name)
+        inactive_select_label_kws.setdefault('text', 'Inactive Protocols')
+        inactive_select_label_kws.setdefault('fontsize', '0.5')
+        inactive_select_label_kws.setdefault('minimize', True)
+        
+        inactive_select_kws = self.setdefault('inactive_select_kws', {})
+        inactive_select_kws.setdefault('prefix', self.name)
+        inactive_select_kws.setdefault('minimize', True)
+        
+        set_active_button_kws = self.setdefault('set_active_button_kws', {})
+        set_active_button_kws.setdefault('prefix', self.name)
+        set_active_button_kws.setdefault('description', 'Set Active')
+        set_active_button_kws.setdefault('button_style', 'warning')
+        set_active_button_kws.setdefault('minimize', True)
+        set_active_button_kws.setdefault('on_interact', self.update_source)
+        set_active_button_kws.setdefault('on_interact_kws', dict(set_active=True))
+        
+        set_inactive_button_kws = self.setdefault('set_inactive_button_kws', {})
+        set_inactive_button_kws.setdefault('prefix', self.name)
+        set_inactive_button_kws.setdefault('description', 'Set Inactive')
+        set_inactive_button_kws.setdefault('minimize', True)
+        set_inactive_button_kws.setdefault('button_style', 'warning')
+        set_inactive_button_kws.setdefault('on_interact', self.update_source)
+        set_inactive_button_kws.setdefault('on_interact_kws', dict(set_inactive=True))
+        
+        # Set WrApps
+        self._label = wra.Label(**label_kws)
+        self._active_select_label = wra.Label(**active_select_label_kws)
+        self._active_select = wra.Select(options=self.active_protocol_options, **active_select_kws)
+        self._set_protocol_button = wra.ToggleButton(**set_protocol_button_kws)
+        self._refresh_button = wra.Button(**refresh_button_kws)
+        self._manage_button = wra.ToggleButton(**manage_button_kws)
+        self._inactive_select_label = wra.Label(**inactive_select_label_kws)
+        self._inactive_select = wra.Select(options=self.inactive_protocol_options, **inactive_select_kws)
+        self._set_active_button = wra.Button(**set_active_button_kws)
+        self._set_inactive_button = wra.Button(**set_inactive_button_kws)
+        
+        # Set core
+        self.core = (
+            self._label - \
+            (
+                (
+                    self._active_select_label - self._active_select - self._set_inactive_button
+                ) + \
+                (
+                    self._inactive_select_label - self._inactive_select - self._set_active_button
+                )
+            ) - \
+            (
+                self._set_protocol_button + \
+                self._refresh_button + \
+                self._manage_button                
             )
-        manage_app = wra.Tags(**self._tags_kws)
-        if manage:
-            self.core = base_app - manage_app
+        )
+
+    def on_set_protocol(self):
+        pass
+    
+    def _on_set_protocol(self, **kwargs):
+        if self._set_protocol_button.get1('value'):
+            self._set_protocol_button.set(description='Unset')
+            self.on_set_protocol(**self.on_set_protocol_kws)
+            self.set(disabled=True, exclude=self._set_protocol_button.name)
+            self.protocol_is_set = True
         else:
-            self.core = base_app
-        self.set_protocol()
+            self._set_protocol_button.set(description='Set')
+            self.set(disabled=False)
+            self.protocol_is_set = False
     
-    def set_protocol(self):
-        self.protocol_name = self.children.ProtocolSelectButtons.get1('label')
-        self.protocol_id = self.children.ProtocolSelectButtons.get1('value')
+    def on_manage(self):
+        if self._manage_button.get1('value'):
+            self._set_protocol_button.set(disabled=True)
+            self._manage_button.set(description='Hide Manage Tools')
+            self._active_select_label.minimize = False
+            self._inactive_select.updatedefault('minimize', False)
+            self._inactive_select_label.minimize = False
+            self._inactive_select.minimize = False
+            self._set_active_button.minimize = False
+            self._set_inactive_button.minimize = False
+        else:
+            self._manage_button.set(description='Manage')
+            self._active_select_label.minimize = True
+            self._inactive_select_label.minimize = True
+            self._inactive_select.updatedefault('minimize', True)
+            self._inactive_select.minimize = True
+            self._set_active_button.minimize = True
+            self._set_inactive_button.minimize = True
+            self._set_protocol_button.set(disabled=False)
     
-    def set_protocol_options(self):
-        ids, names, active = self.source.fetch('protocol_id', 'protocol_name', 'active', order_by='-ordering DESC')
-        self.active_protocol_ids = ids[active.astype(bool)].tolist()
-        self.active_protocols = names[active.astype(bool)].tolist()
-        self.all_protocols = names.tolist()
+    @property
+    def protocols(self):
+        return [
+            DataType.Protocol(
+                ID=row.get('protocol_id'), 
+                name=row.get('protocol_name'), 
+                tag=row.get('tag'), 
+                active=row.get('active'), 
+                ordering=row.get('ordering')
+                ) for row in self.source.fetch(as_dict=True, order_by='-ordering DESC')
+        ]
+    
+    @property
+    def active_protocols(self):
+        return [p for p in self.protocols if p.active==1]
+    
+    @property
+    def inactive_protocols(self):
+        return [p for p in self.protocols if p.active==0]
+    
+    def _format_protocol_object(self, protocol_obj:DataType.Protocol):
+        return (f'{protocol_obj.name} ({protocol_obj.ID[:4]})', protocol_obj)
     
     @property
     def protocol_options(self):
-        if self.active_protocols is not None and self.active_protocol_ids is not None:
-            return [(n, i) for n, i in zip(self.active_protocols, self.active_protocol_ids)]
+        return [self._format_protocol_object(p) for p in self.protocols]
     
-    def manage_protocols(self):
-        if self.children.ProtocolManageButton.get1('value'):
-            self.children.ProtocolManageButton.set(description='Set')
-            self.children.ProtocolTags.set(hide=False)
-        else:
-            self.update_protocols()
-            self.set_protocol_options()
-            self.children.ProtocolSelectButtons.set(options=self.protocol_options, value=self.protocol_options[0])
-            self.children.ProtocolManageButton.set(description='Manage')
-            self.children.ProtocolTags.set(hide=True)
+    @property
+    def active_protocol_options(self):
+        return [self._format_protocol_object(p) for p in self.active_protocols]
     
-    def update_protocols(self):
-        updated = self.children.ProtocolTags.get1('value')
-        for key in self.source:
-            protocol_name = key.get('protocol_name')
-            if protocol_name in updated:
-                key.update({'active': 1})
-                key.update({'ordering': updated.index(protocol_name)})
-            else:
-                key.update({'active': 0})
-                key.update({'ordering': None})
-            self.source.insert1(key, replace=True)
+    @property
+    def inactive_protocol_options(self):
+        return [self._format_protocol_object(p) for p in self.inactive_protocols]
+    
+    def update_source(self, set_active=None, set_inactive=None):
+        assert (set_active is None) ^ (set_inactive is None), 'either set_active or set_inactive must be True'
+        
+        def update(protocol_id):
+            update_dict = (self.source & {'protocol_id': protocol_id}).fetch1()
+            if set_active is not None:
+                update_dict.update({'active': 1})
+                orderings = [p.ordering for p in self.active_protocols if p.ordering is not None]
+                if orderings:
+                    last_idx = np.max(orderings)
+                else:
+                    last_idx = -1
+                update_dict.update({'ordering': 1 + last_idx})
+            if set_inactive is not None:
+                update_dict.update({'active': 0})
+                update_dict.pop('ordering')
+            update_dict.pop('last_updated')
+            self.source.insert1(update_dict, replace=True)
+        
+        if set_active is not None:
+            protocol_id = self._inactive_select.get1('value').ID
+        if set_inactive is not None:
+            protocol_id = self._active_select.get1('value').ID
+        
+        update(protocol_id)        
+        self.refresh()
+        
+    def refresh(self):
+        self._active_select.updatedefault('options', self.active_protocol_options)
+        self._inactive_select.updatedefault('options', self.inactive_protocol_options)
+        self._active_select.reset()
+        self._inactive_select.reset()
 
 
 class DataJointTableApp(wra.App):
@@ -246,3 +390,55 @@ class DataJointTableApp(wra.App):
         )
         df = df[[*self.attrs]]
         return df
+
+
+class UserInfoManager(wra.App):
+    store_config = [
+        'label',
+        'get_data_kws',
+        'set_data_kws'
+    ]
+    
+    def make(self, label, get_data=None, set_data=None, get_data_kws=None, set_data_kws=None, **kwargs):
+        self.label = label
+        self.get_data = self.get_data if get_data is None else get_data
+        self.set_data = self.set_data if set_data is None else set_data
+        self.get_data_kws = {} if get_data_kws is None else get_data_kws
+        self.set_data_kws = {} if set_data_kws is None else set_data_kws
+        label_kws = dict(
+            text=self.label
+        )
+        field_kws = dict(
+            value=self._get_data(**self.get_data_kws),
+            disabled=True
+            
+        )
+        button_kws = dict(
+            description='Update', 
+            button_style='info',
+            on_interact=self._set_data,
+            on_interact_kws=self.set_data_kws
+        )
+        self.core = (
+            wra.Label(**label_kws) + \
+            wra.Field(**field_kws) + \
+            wra.ToggleButton(**button_kws)
+        )
+    
+    def get_data(self, **get_data_kws):
+        pass
+    
+    def set_data(self, **set_data_kws):
+        pass
+    
+    def _get_data(self, **get_data_kws):
+        return self.get_data(**get_data_kws)
+
+    def _set_data(self, **set_data_kws):
+        if self.children.ToggleButton.get1('value'):
+            self.children.Field.set(disabled=False)
+            self.children.ToggleButton.set(description='Set')
+        else:
+            self.children.Field.set(disabled=True)
+            self.children.ToggleButton.set(description='Update')
+            self.set_data(self.children.Field.get1('value'), **set_data_kws)
