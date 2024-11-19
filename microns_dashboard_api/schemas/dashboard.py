@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import traceback
-from xml.etree.ElementInclude import include
 
 import datajoint as dj
 import datajoint_plus as djp
